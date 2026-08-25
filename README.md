@@ -19,8 +19,8 @@ noise; where they do not overlap the gap is real and quoted. Raw rows and the
 
 | Kernel | Metric | Best CUDA | Best Mojo | Mojo / CUDA | Vendor ref | Verdict |
 |--------|--------|----------:|----------:|:-----------:|-----------:|---------|
-| reduction (256M f32)   | GB/s    | **889** (warp_shfl) | 895 (warp_shfl) | 100.7% | 895 (CUB)    | **indistinguishable** |
-| softmax (16384×1024)   | GB/s    | **722** (online)    | 728 (online)    | 100.8% | 824 (torch)  | **indistinguishable** |
+| reduction (256M f32)   | GB/s    | 889 (warp_shfl) | 895 (warp_shfl) | 100.7% | 895 (CUB)    | **indistinguishable** |
+| softmax (16384×1024)   | GB/s    | 722 (online)    | 728 (online)    | 100.8% | 824 (torch)  | **indistinguishable** |
 | softmax (1024×16384)   | GB/s    | **544** (online)    | 504 (online)    | 92.6% | 643 (torch)   | CUDA +8% |
 | matmul (1024³ f32)     | GFLOP/s | **9 279** (regblock)| 8 497 (regblock)| 91.6% | cuBLAS 18 118 | CUDA +9% |
 | matmul (4096³ f32)     | GFLOP/s | **17 370** (regblock)| 13 780 (regblock)| 79.3% | cuBLAS 23 385 | CUDA +26% |
@@ -90,7 +90,7 @@ kernels/
 bench/        Makefile, run.sh (harness -> CSV), plot.py, profile.sh (ncu),
               vendor_softmax.py (optional torch ref)
 results/      results.csv (raw), run-env.txt (clocks), *.png (charts), ncu/ (profiles)
-docs/         methodology.md, roofline-3090.md
+docs/         methodology.md, roofline-3090.md, portability.md
 ```
 
 Every kernel program is self-contained: it runs its own size sweep, checks
@@ -109,26 +109,30 @@ driver exposing the 3090. You need **CUDA** (`nvcc`) and a **uv** environment wi
 #    the layout library; the bare mojo wheel alone cannot launch kernels).
 uv sync
 
-# 2. (recommended) pin GPU clocks so the medians are not chasing the boost
+# 2. (optional but do it before step 4) the torch vendor reference for softmax
+#    (~2.5 GB CUDA build). Install it first so the harness can emit the vendor
+#    column; without it the torch rows are simply absent from results.csv.
+uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cu124
+
+# 3. (recommended) pin GPU clocks so the medians are not chasing the boost
 #    governor. Under WSL this MUST be issued from an Administrator shell on the
 #    Windows host, not inside WSL (the guest does not own the GPU) -- see the
 #    "Locking GPU clocks under WSL" section of docs/methodology.md for why:
 #      nvidia-smi -lgc 1695,1695 && nvidia-smi -lmc 9751   (reset: -rgc / -rmc)
 
-# 3. Build + run everything -> results/results.csv + results/run-env.txt
+# 4. Build + run everything -> results/results.csv + results/run-env.txt
 ./bench/run.sh
 
-# 4. Charts
+# 5. Charts
 uv run bench/plot.py
-
-# 5. (optional) the torch vendor reference for softmax (~2.5 GB CUDA build)
-uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cu124
 
 # 6. (optional) Nsight Compute profiles (needs GPU counter permissions)
 sudo ./bench/profile.sh
 ```
 
-Run a single side by hand:
+Run a single side by hand (the `bench/Makefile` auto-detects the arch; the explicit
+`-arch=sm_86` below is just the 3090 override for a one-off `nvcc` invocation —
+change it to your card, or use `make` to let it detect):
 
 ```bash
 nvcc -O3 -std=c++20 -arch=sm_86 -lcublas -o /tmp/mm kernels/matmul/cuda/matmul.cu && /tmp/mm --header
@@ -138,13 +142,20 @@ nvcc -O3 -std=c++20 -arch=sm_86 -lcublas -o /tmp/mm kernels/matmul/cuda/matmul.c
 ## What "optimized" means here
 
 - **reduction**: grid-stride `float4`-vectorized load, warp-shuffle (`__shfl_down` /
-  `warp.sum`) block reduction, one atomic/partial per block. Memory-bound; targets
-  peak bandwidth. Referenced against `cub::DeviceReduce::Sum`.
+  `warp.sum`) block reduction. Memory-bound; targets peak bandwidth. Referenced
+  against `cub::DeviceReduce::Sum`. The two sides finish the reduction slightly
+  differently — **CUDA** does one `atomicAdd` per block into a single accumulator;
+  **Mojo** is two-pass (each block writes a partial, then a single block sums the
+  partials). At 256M both are limited by the `float4` load traffic, not the
+  block-finalization step, so the regime stays memory-bound and the two land within
+  ~6 GB/s of each other and of CUB (see [docs/portability.md](docs/portability.md)).
 - **softmax**: one block per row, single-pass **online softmax** (fused max+sum) with
   a warp-shuffle reduction over `(max, sum)` pairs, vs a naive three-pass baseline.
   Referenced against `torch.softmax` (optional).
 - **matmul**: 128×128 block tile, `BK=8`, an **8×8 register tile per thread** (256
-  threads/block), shared-memory staging, `float4` loads. Compared against a simple
-  32×32 tiled kernel and against **cuBLAS**.
+  threads/block), shared-memory staging, `float4` loads. These tile dimensions are
+  the NVIDIA config; on the Mojo side they are a device-selected comptime config, not
+  hardcoded (see [docs/portability.md](docs/portability.md)). Compared against a
+  simple 32×32 tiled kernel and against **cuBLAS**.
 
 Details and the per-kernel optimization story are in each `kernels/*/README.md`.

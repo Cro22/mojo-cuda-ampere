@@ -8,7 +8,7 @@
 | CUDA cores (fp32) | 10 496 | 128 × 82 |
 | Boost clock | ~1.695 GHz | spec |
 | **fp32 peak** | **35.6 TFLOP/s** | 10496 × 1.695 GHz × 2 (FMA) |
-| TF32 tensor-core peak | ~71 TFLOP/s | (not used here; fp32 CUDA cores only) |
+| TF32 tensor-core peak | 35.6 TFLOP/s dense | (not used here; fp32 CUDA cores only. 71 is the 2:4-sparsity figure; the dense ~71 spec number is FP16 with FP32 accumulate, not TF32) |
 | Memory | 24 GB GDDR6X, 384-bit, 19.5 Gbps | spec |
 | **DRAM peak** | **936 GB/s** | 384/8 × 19.5 |
 | L2 cache | 6 MB | spec |
