@@ -1,0 +1,41 @@
+# --- build artifacts ---------------------------------------------------------
+bench/build/          # compiled CUDA binaries (make -C bench)
+*.o
+*.obj
+*.out
+a.out
+*.exe
+
+# CUDA / Mojo intermediates
+*.ptx
+*.cubin
+*.fatbin
+*.mojopkg
+
+# --- profiling ---------------------------------------------------------------
+*.ncu-rep             # Nsight Compute raw reports (large); keep the .txt summaries
+*.nsys-rep
+*.qdrep
+
+# --- python / uv -------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+# NOTE: uv.lock IS committed on purpose (reproducible env) — do not ignore it.
+
+# --- editors / OS ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- local tool state --------------------------------------------------------
+.claude/                      # Claude Code local state / permissions, not shared
+
+# --- results -----------------------------------------------------------------
+# Tracked: results/results.csv and results/*.png (they are the deliverable).
+# Ignored: bulky raw profiler dumps under results/ncu/.
+results/ncu/*.ncu-rep
+results/ncu/*.nsys-rep

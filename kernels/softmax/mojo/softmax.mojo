@@ -1,0 +1,160 @@
+# Row-wise numerically-stable softmax of an M x N float32 matrix (sm_86), Mojo.
+#
+# Mirrors the CUDA `online` variant: one block per row, a single streaming pass
+# computing the running (max, sum) with the online-softmax combine, block-reduced
+# over (max,sum) pairs via warp shuffles, then one normalize pass.
+#
+# Softmax is bandwidth-bound: traffic = read + write matrix = 2*M*N*4 B.
+from std.math import exp
+from std.sys import has_accelerator
+from std.gpu import thread_idx, block_idx, block_dim, lane_id, WARP_SIZE
+from std.gpu.primitives import warp
+from max.gpu.sync import barrier
+from max.gpu.host import DeviceContext
+from layout import TileTensor, TensorLayout, row_major, stack_allocation
+from max.gpu.memory import AddressSpace
+
+comptime dtype = DType.float32
+comptime BLOCK = 256
+comptime NWARPS = BLOCK // 32
+
+# online-softmax combine of two partial (max, sum) reductions
+@always_inline
+def combine(m: Float32, s: Float32, m2: Float32, s2: Float32) -> Tuple[Float32, Float32]:
+    var mx = max(m, m2)
+    return (mx, s * exp(m - mx) + s2 * exp(m2 - mx))
+
+@always_inline
+def warp_reduce_ms(m0: Float32, s0: Float32) -> Tuple[Float32, Float32]:
+    var m = m0
+    var s = s0
+    comptime for i in range(5):                 # offsets 16,8,4,2,1
+        var off = UInt32(1 << (4 - i))
+        var m2 = warp.shuffle_down(m, off)
+        var s2 = warp.shuffle_down(s, off)
+        var r = combine(m, s, m2, s2)
+        m = r[0]
+        s = r[1]
+    return (m, s)
+
+def softmax_online[LT: TensorLayout](
+    input: TileTensor[dtype, LT, MutAnyOrigin],
+    output: TileTensor[dtype, LT, MutAnyOrigin],
+    M: Int64,
+    N: Int64,
+):
+    comptime assert input.flat_rank == 2 and output.flat_rank == 2
+    var row = block_idx.x
+    if row >= Int(M):
+        return
+    var tid = thread_idx.x
+    var ncols = Int(N)
+
+    # streaming pass: per-thread running (max, sum)
+    var m: Float32 = -1.0e30
+    var s: Float32 = 0.0
+    var j = tid
+    while j < ncols:
+        var x = rebind[Float32](input[row, j])
+        var mn = max(m, x)
+        s = s * exp(m - mn) + exp(x - mn)
+        m = mn
+        j += block_dim.x
+
+    # block reduction over (m, s) pairs
+    var sm = stack_allocation[dtype, address_space=AddressSpace.SHARED](row_major[NWARPS]())
+    var ss = stack_allocation[dtype, address_space=AddressSpace.SHARED](row_major[NWARPS]())
+    var lane = lane_id()
+    var wid = tid // WARP_SIZE
+    var wr = warp_reduce_ms(m, s)
+    if lane == 0:
+        sm[wid] = wr[0]
+        ss[wid] = wr[1]
+    barrier()
+
+    var row_max: Float32 = -1.0e30
+    var row_sum: Float32 = 0.0
+    if wid == 0:
+        var mm = rebind[Float32](sm[lane]) if lane < NWARPS else Float32(-1.0e30)
+        var ssum = rebind[Float32](ss[lane]) if lane < NWARPS else Float32(0.0)
+        var fr = warp_reduce_ms(mm, ssum)
+        if lane == 0:
+            sm[0] = fr[0]
+            ss[0] = fr[1]
+    barrier()
+    row_max = rebind[Float32](sm[0])
+    row_sum = rebind[Float32](ss[0])
+
+    # normalize
+    var inv = 1.0 / row_sum
+    var jj = tid
+    while jj < ncols:
+        output[row, jj] = rebind[output.ElementType](exp(rebind[Float32](input[row, jj]) - row_max) * inv)
+        jj += block_dim.x
+
+def main() raises:
+    comptime assert has_accelerator(), "Requires GPU"
+    var ctx = DeviceContext()
+
+    var rows_list = [16384, 4096, 1024]
+    var cols_list = [1024, 4096, 16384]
+
+    for si in range(len(rows_list)):
+        var M = rows_list[si]
+        var N = cols_list[si]
+        var total = M * N
+        var layout = row_major(M, N)
+
+        var in_buf = ctx.enqueue_create_buffer[dtype](total)
+        var out_buf = ctx.enqueue_create_buffer[dtype](total)
+        var host = ctx.enqueue_create_host_buffer[dtype](total)
+        var refh = ctx.enqueue_create_host_buffer[dtype](total)
+        ctx.synchronize()
+
+        for i in range(total):
+            host[i] = Float32((i % 257) - 128) * 0.03
+
+        # CPU reference softmax per row
+        for r in range(M):
+            var mx: Float32 = -1.0e30
+            for c in range(N):
+                mx = max(mx, host[r * N + c])
+            var sm2: Float64 = 0.0
+            for c in range(N):
+                sm2 += Float64(exp(host[r * N + c] - mx))
+            for c in range(N):
+                refh[r * N + c] = Float32(Float64(exp(host[r * N + c] - mx)) / sm2)
+
+        ctx.enqueue_copy(dst_buf=in_buf, src_buf=host)
+        var input = TileTensor(in_buf, layout)
+        var output = TileTensor(out_buf, layout)
+
+        comptime kern = softmax_online[type_of(layout)]
+
+        def run(c: DeviceContext) raises {input, output, M, N}:
+            c.enqueue_function[kern](input, output, Int64(M), Int64(N),
+                grid_dim=M, block_dim=BLOCK)
+
+        run(ctx)
+        ctx.synchronize()
+
+        # correctness: relative L2 over the whole matrix
+        var num: Float64 = 0.0
+        var den: Float64 = 0.0
+        with out_buf.map_to_host() as g:
+            for i in range(total):
+                var d = Float64(g[i]) - Float64(refh[i])
+                num += d * d
+                den += Float64(refh[i]) * Float64(refh[i])
+        var correct = 1 if (num / den) ** 0.5 <= 1e-4 else 0
+
+        var reps = 50
+        var nanos = ctx.execution_time(run, reps)
+        var time_ms = Float64(nanos) / Float64(reps) / 1.0e6
+
+        var bytes = 2.0 * Float64(total) * 4.0
+        var flops = 5.0 * Float64(total)
+        var gflops = flops / (time_ms * 1.0e6)
+        var gbytes = bytes / (time_ms * 1.0e6)
+        print("softmax,mojo,online,f32,", M, ",", N, ",1,", time_ms, ",",
+              gflops, ",", gbytes, ",", correct, sep="")
