@@ -1,9 +1,17 @@
-# Builds the CUDA side of the shootout. Ampere / RTX 3090 = sm_86.
+# Builds the CUDA side of the shootout.
 #
 #   make            # build all three CUDA binaries into build/
+#   make ARCH=sm_75 # force a target arch (overrides auto-detection)
 #   make clean
 NVCC    ?= $(shell command -v nvcc 2>/dev/null || echo /usr/local/cuda/bin/nvcc)
-ARCH    ?= sm_86
+
+# Target arch is auto-detected from the compute capability of the GPU present,
+# so the same Makefile builds and RUNS on any card: RTX 3090 -> sm_86, T4 ->
+# sm_75. Hardcoding sm_86 does not just run slow on a T4, it fails to launch.
+# `compute_cap` is a query (works under WSL); override with `make ARCH=sm_80`.
+# Falls back to sm_86 if nvidia-smi is unavailable (e.g. building GPU-less).
+DETECTED_CC := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
+ARCH    ?= sm_$(if $(DETECTED_CC),$(DETECTED_CC),86)
 NVFLAGS := -O3 -std=c++20 -arch=$(ARCH)
 ROOT    := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))..
 BUILD   := $(ROOT)/bench/build
