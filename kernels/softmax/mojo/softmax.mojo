@@ -9,14 +9,21 @@ from std.math import exp
 from std.sys import has_accelerator
 from std.gpu import thread_idx, block_idx, block_dim, lane_id, WARP_SIZE
 from std.gpu.primitives import warp
+from std.bit import log2_floor
 from max.gpu.sync import barrier
 from max.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, row_major, stack_allocation
 from max.gpu.memory import AddressSpace
 
 comptime dtype = DType.float32
+
+# ---- device-derived launch config (see docs/portability.md) -----------------
+# BLOCK is the only host-side knob; NWARPS and the warp-shuffle tree depth are
+# derived from WARP_SIZE *inside* the kernel, where the target is the GPU. On
+# NVIDIA (WARP_SIZE=32) this reproduces NWARPS=8 and a 5-step shuffle tree; on a
+# 64-lane wavefront it becomes NWARPS=4 and a 6-step tree, instead of silently
+# reducing over only the first 32 lanes as the old hardcoded range(5) did.
 comptime BLOCK = 256
-comptime NWARPS = BLOCK // 32
 
 # --- timing statistics: median + inter-quartile range over N samples ---------
 def _isort(mut s: List[Float64]):
@@ -47,10 +54,11 @@ def combine(m: Float32, s: Float32, m2: Float32, s2: Float32) -> Tuple[Float32, 
 
 @always_inline
 def warp_reduce_ms(m0: Float32, s0: Float32) -> Tuple[Float32, Float32]:
+    comptime DEPTH = log2_floor(WARP_SIZE)      # 5 on a 32-lane warp, 6 on 64
     var m = m0
     var s = s0
-    comptime for i in range(5):                 # offsets 16,8,4,2,1
-        var off = UInt32(1 << (4 - i))
+    comptime for i in range(DEPTH):             # offsets WARP_SIZE/2 .. 1
+        var off = UInt32(1 << (DEPTH - 1 - i))
         var m2 = warp.shuffle_down(m, off)
         var s2 = warp.shuffle_down(s, off)
         var r = combine(m, s, m2, s2)
@@ -83,6 +91,7 @@ def softmax_online[LT: TensorLayout](
         j += block_dim.x
 
     # block reduction over (m, s) pairs
+    comptime NWARPS = BLOCK // WARP_SIZE         # in-kernel: WARP_SIZE is the GPU's
     var sm = stack_allocation[dtype, address_space=AddressSpace.SHARED](row_major[NWARPS]())
     var ss = stack_allocation[dtype, address_space=AddressSpace.SHARED](row_major[NWARPS]())
     var lane = lane_id()

@@ -17,8 +17,16 @@ from layout import TileTensor, TensorLayout, row_major, stack_allocation
 from max.gpu.memory import AddressSpace
 
 comptime dtype = DType.float32
+
+# ---- device-derived launch config (see docs/portability.md) -----------------
+# BLOCK and the per-SM wave multiplier are host-side knobs. The warp-level count
+# (NWARPS) is derived from WARP_SIZE *inside* the kernel, where the compilation
+# target is the GPU: at module scope WARP_SIZE is a host default (32) and
+# is_nvidia_gpu() reports CPU on this toolchain, so warp counts must not be
+# baked here. On NVIDIA (WARP_SIZE=32, BLOCK=256) NWARPS reduces to 8, exactly
+# the old hardcoded value; on a 64-lane wavefront it correctly becomes 4.
 comptime BLOCK = 256
-comptime NWARPS = BLOCK // 32
+comptime WAVES_PER_SM = 32          # grid = SM_count * WAVES_PER_SM
 
 # --- timing statistics: median + inter-quartile range over N samples ---------
 # Mirrors the CUDA side (bench.cuh): report a distribution, not one number, so
@@ -48,6 +56,7 @@ def _pctile(s: List[Float64], q: Float64) -> Float64:
 # (valid only in warp 0). Uses warp.sum + a shared staging array.
 @always_inline
 def block_reduce_sum(val: Float32) -> Float32:
+    comptime NWARPS = BLOCK // WARP_SIZE     # in-kernel: WARP_SIZE is the GPU's
     var s = stack_allocation[dtype, address_space=AddressSpace.SHARED](row_major[NWARPS]())
     var lane = lane_id()
     var wid = thread_idx.x // WARP_SIZE
@@ -106,7 +115,7 @@ def main() raises:
     # Query SM count from the device so the grid saturates any GPU, not just the
     # 3090 (GA102 = 82). One block per SM x 32 waves keeps every SM busy.
     var sm_count = ctx.get_attribute(DeviceAttribute.MULTIPROCESSOR_COUNT)
-    var grid = sm_count * 32
+    var grid = sm_count * WAVES_PER_SM
 
     for si in range(len(sizes)):
         var n = sizes[si]
