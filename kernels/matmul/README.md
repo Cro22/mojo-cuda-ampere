@@ -1,16 +1,16 @@
 # Matmul (SGEMM)
 
-`C = A × B`, `(M×K)·(K×N)`, row-major `float32`. **Compute-bound** once tiled — the
+`C = A × B`, `(M×K)·(K×N)`, row-major `float32`. **Compute-bound** once tiled, the
 metric is GFLOP/s against the 35.6 TFLOP/s fp32 peak. `2·M·N·K` flops.
 
 ## Variants
 
 | variant | tile | per-thread | idea |
 |---------|------|-----------|------|
-| `naive` | — | 1 output | one thread per `C` element, all reads from global memory. |
+| `naive` | n/a | 1 output | one thread per `C` element, all reads from global memory. |
 | `tiled` | 32×32 | 1 output | shared-memory tiles; each element reused 32×. |
 | `regblock` | 128×128, `BK=8` | **8×8 register tile** | 256 threads/block, each computing an 8×8 block of `C` from register-resident operands. The optimized kernel. |
-| `cublas` | — | — | vendor SGEMM, the reference / correctness oracle (CUDA only). |
+| `cublas` | n/a | n/a | vendor SGEMM, the reference / correctness oracle (CUDA only). |
 
 ### regblock structure (both languages)
 
@@ -31,25 +31,34 @@ metric is GFLOP/s against the 35.6 TFLOP/s fp32 peak. `2·M·N·K` flops.
 | `#pragma unroll` | `comptime for` (compile-time unroll) |
 | `reinterpret_cast<float4*>` loads | `A.ptr.unsafe_load[width=4](offset)` |
 
-## Results (GFLOP/s)
+## Results (GFLOP/s, clocks locked @1695 MHz, median of 30)
 
 | size | CUDA regblock | Mojo regblock | Mojo/CUDA | cuBLAS |
 |------|-------------:|-------------:|:---------:|-------:|
-| 1024³ | 9 850 | 9 040 | **92%** | 19 400 |
-| 2048³ | 17 200 | ~12 500 | ~73% | 25 700 |
-| 4096³ | **19 700** | **16 500** | **84%** | 27 000 |
+| 1024³ | 9 279 | 8 491 | **91.5%** | 18 079 |
+| 2048³ | 14 546 | 11 563 | 79.5% | 22 672 |
+| 4096³ | **16 442** | **13 099** | 79.7% | 22 897 |
 
-*(Single-run figures; ±few % run-to-run.)* Register blocking is a ~7× jump over the
-simple tiled kernel. With `float4`-vectorized loads on **both** sides, Mojo now
-reaches 92% of the CUDA kernel at 1024³ and ~84% at 4096³. The residual gap is
-**double buffering** (overlapping the next tile's global loads with the current
-tile's FMAs) and instruction scheduling — not memory movement, and not the
-arithmetic (the 8×8 register inner loop is identical).
+Register blocking is a ~7x jump over the simple 32×32 tiled kernel (~2 300 GFLOP/s).
+With `float4`-vectorized loads on **both** sides, the Mojo/CUDA ratio is **92% at
+1024³** and settles at **~80% at 2048³ and 4096³**. The residual gap is **double
+buffering** (overlapping the next tile's global loads with the current tile's FMAs)
+and instruction scheduling, not memory movement and not the arithmetic (the 8×8
+register inner loop is identical).
 
-> 2048³ dips (~73%) for both languages relative to 1024³/4096³: 2048/128 = 16
-> blocks per side → 256 blocks over 82 SMs ≈ 3.1 waves, the worst wave-quantization
-> of the three sizes. It is a scheduling artifact of the tile/GPU ratio, not a
-> kernel defect.
+The ratio dropping from 92% to ~80% as the problem grows is consistent with the
+double-buffering explanation: a larger `K` means more `BK`-tiles in the main loop, so
+more iterations where CUDA's overlap of the next tile's loads with the current tile's
+FMAs hides latency that the Mojo kernel exposes. At 1024³ there are only 128 such
+iterations and the vectorized loads keep Mojo close; by 4096³ there are 512 and the
+un-overlapped load latency has more room to accumulate.
+
+> Note on locked clocks: these medians are ~15% below an earlier unlocked draft
+> because the 3090 boosts to ~2 GHz. Pinning the SM clock at 1695 MHz is what makes
+> the CUDA-vs-Mojo comparison fair: the harness runs the CUDA variant before the Mojo
+> one within each kernel, so on an *unlocked* card the compute-heavy 4096³ Mojo run
+> lands on a hotter, down-clocked GPU and looks ~13% slower than it is. Locking
+> removes that ordering bias entirely (see `results/run-env.txt`).
 
 ## Run
 
