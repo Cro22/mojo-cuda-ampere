@@ -67,6 +67,15 @@ the SM and memory clocks before measuring and samples the actual SM clock every
 `results/run-env.txt`. Pinning the clocks under WSL has a non-obvious catch that
 gets its own section below.
 
+An unlocked run makes the reason for all this visible. Running the reduction on a
+T4 (Colab, no clock control) with everything else measuring an IQR under 1%, the
+**naive** variant at 256M reported `p25=11.06 ms`, `p75=13.06 ms`: an 18% spread,
+on the one kernel slow enough to keep the card busy long enough to heat up and
+down-clock mid-measurement. That is exactly the DVFS bias the clock lock removes,
+caught live: the widest quartile range in the run belongs to the longest-running
+kernel, and it is thermal, not algorithmic. The IQR is what surfaces it instead of
+hiding it in a single number.
+
 ## Locking GPU clocks under WSL (why it needs an Administrator shell on Windows)
 
 Locking the clocks is what turns "median of 30" from a slogan into a real number,
@@ -159,6 +168,20 @@ count.
 The SM count that sizes the reduction grid is **queried at runtime**
 (`cudaDevAttrMultiProcessorCount` / `DeviceAttribute.MULTIPROCESSOR_COUNT`), so the
 harness saturates whatever GPU it runs on rather than assuming the 3090.
+
+### Cross-architecture verification
+
+All three kernels have been run on a second architecture, a **Turing T4
+(`sm_75`, Colab)**, and all variants pass correctness on both `sm_75` and `sm_86`
+with **no source changes**: the CUDA `Makefile` auto-detects the compute
+capability, and the Mojo kernels derive their warp-level structure from
+`WARP_SIZE` in-kernel and select the matmul tile from `has_*_gpu_accelerator()`
+host-side (see [portability.md](portability.md)). The T4 numbers themselves are
+**not** published as results, they were taken without clock control, which this
+methodology treats as unmeasured; the cross-architecture claim here is about
+*correctness portability*, and, qualitatively, that the memory-bound kernels tie
+across languages on both cards. Locked-clock T4 numbers would need a machine where
+the clocks can be pinned.
 
 ## Reproducing
 

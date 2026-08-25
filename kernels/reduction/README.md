@@ -65,6 +65,14 @@ step quantitatively you would profile with `ncu` (`bench/profile.sh`) and read
 `DRAM Throughput` per variant; that needs GPU counter permissions this WSL setup does
 not grant by default.
 
+**The penalty holds across generations.** On Turing (T4, `sm_75`) the same naive
+kernel runs ~41-83 GB/s against `warp_shfl`'s ~242-270, a **3-6x** gap, versus
+~2.4-3.5x on Ampere (naive ~258-290 vs 655-891). Not vectorizing and not using the
+shuffle costs the same order of magnitude regardless of architecture: it is a
+property of the memory system, not of one GPU. (The Turing figures are an
+unlocked-clock cross-check on all three variants passing correctness at `sm_75`,
+not locked-clock published results; see [docs/portability.md](../../docs/portability.md).)
+
 ## Run
 
 ```bash
