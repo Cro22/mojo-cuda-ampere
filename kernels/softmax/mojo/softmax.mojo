@@ -66,6 +66,65 @@ def warp_reduce_ms(m0: Float32, s0: Float32) -> Tuple[Float32, Float32]:
         s = r[1]
     return (m, s)
 
+# Naive three-pass baseline (max, sum of exp, normalize), block-reduced through a
+# shared-memory log-step tree. Mirrors the CUDA softmax_naive: reads the row 3x,
+# the baseline the online variant is measured against. One block per row.
+def softmax_naive[LT: TensorLayout](
+    input: TileTensor[dtype, LT, MutAnyOrigin],
+    output: TileTensor[dtype, LT, MutAnyOrigin],
+    M: Int64,
+    N: Int64,
+):
+    comptime assert input.flat_rank == 2 and output.flat_rank == 2
+    var row = block_idx.x
+    if row >= Int(M):
+        return
+    var tid = thread_idx.x
+    var ncols = Int(N)
+    var red = stack_allocation[dtype, address_space=AddressSpace.SHARED](row_major[BLOCK]())
+
+    # pass 1: row max
+    var m: Float32 = -1.0e30
+    var j = tid
+    while j < ncols:
+        m = max(m, rebind[Float32](input[row, j]))
+        j += block_dim.x
+    red[tid] = rebind[red.ElementType](m)
+    barrier()
+    var stride = BLOCK // 2
+    while stride > 0:
+        if tid < stride:
+            red[tid] = rebind[red.ElementType](
+                max(rebind[Float32](red[tid]), rebind[Float32](red[tid + stride])))
+        barrier()
+        stride //= 2
+    var row_max = rebind[Float32](red[0])
+    barrier()
+
+    # pass 2: sum of exp(x - row_max)
+    var s: Float32 = 0.0
+    j = tid
+    while j < ncols:
+        s += exp(rebind[Float32](input[row, j]) - row_max)
+        j += block_dim.x
+    red[tid] = rebind[red.ElementType](s)
+    barrier()
+    stride = BLOCK // 2
+    while stride > 0:
+        if tid < stride:
+            red[tid] = rebind[red.ElementType](
+                rebind[Float32](red[tid]) + rebind[Float32](red[tid + stride]))
+        barrier()
+        stride //= 2
+    var inv = 1.0 / rebind[Float32](red[0])
+
+    # pass 3: normalize
+    j = tid
+    while j < ncols:
+        output[row, j] = rebind[output.ElementType](
+            exp(rebind[Float32](input[row, j]) - row_max) * inv)
+        j += block_dim.x
+
 def softmax_online[LT: TensorLayout](
     input: TileTensor[dtype, LT, MutAnyOrigin],
     output: TileTensor[dtype, LT, MutAnyOrigin],
@@ -161,6 +220,38 @@ def main() raises:
         var input = TileTensor(in_buf, layout)
         var output = TileTensor(out_buf, layout)
 
+        comptime WARMUP = 5
+        comptime REPS = 30
+
+        # ---- naive (three-pass) ----
+        comptime kern_n = softmax_naive[type_of(layout)]
+        def run_n(c: DeviceContext) raises {input, output, M, N}:
+            c.enqueue_function[kern_n](input, output, Int64(M), Int64(N),
+                grid_dim=M, block_dim=BLOCK)
+        run_n(ctx)
+        ctx.synchronize()
+        var num_n: Float64 = 0.0
+        var den_n: Float64 = 0.0
+        with out_buf.map_to_host() as g:
+            for i in range(total):
+                var d = Float64(g[i]) - Float64(refh[i])
+                num_n += d * d
+                den_n += Float64(refh[i]) * Float64(refh[i])
+        var correct_n = 1 if (num_n / den_n) ** 0.5 <= 1e-4 else 0
+        for _ in range(WARMUP):
+            _ = ctx.execution_time(run_n, 1)
+        var samp_n: List[Float64] = []
+        for _ in range(REPS):
+            samp_n.append(Float64(ctx.execution_time(run_n, 1)) / 1.0e6)
+        _isort(samp_n)
+        var med_n = _pctile(samp_n, 0.5)
+        var p25_n = _pctile(samp_n, 0.25)
+        var p75_n = _pctile(samp_n, 0.75)
+        print("softmax,mojo,naive,f32,", M, ",", N, ",1,", med_n, ",", p25_n,
+              ",", p75_n, ",", REPS, ",", 5.0 * Float64(total) / (med_n * 1.0e6),
+              ",", 2.0 * Float64(total) * 4.0 / (med_n * 1.0e6), ",", correct_n, sep="")
+
+        # ---- online (single-pass) ----
         comptime kern = softmax_online[type_of(layout)]
 
         def run(c: DeviceContext) raises {input, output, M, N}:
@@ -180,8 +271,6 @@ def main() raises:
                 den += Float64(refh[i]) * Float64(refh[i])
         var correct = 1 if (num / den) ** 0.5 <= 1e-4 else 0
 
-        comptime WARMUP = 5
-        comptime REPS = 30
         for _ in range(WARMUP):
             _ = ctx.execution_time(run, 1)
         var samples: List[Float64] = []

@@ -22,9 +22,13 @@ One block handles one row; threads stride across the columns.
 
 ## CUDA ↔ Mojo mapping
 
+Both variants are implemented on both sides, so the naive-vs-online comparison is
+symmetric across languages.
+
 | CUDA | Mojo |
 |------|------|
-| pairwise `__shfl_down_sync` on `(m,s)` | `warp.shuffle_down` on `m` and `s`, same combine |
+| pairwise `__shfl_down_sync` on `(m,s)` (online) | `warp.shuffle_down` on `m` and `s`, same combine |
+| shared `red[BLOCK]` log-step tree (naive) | shared `TileTensor` + `stride >>= 1` tree, same shape |
 | `__expf` | `std.math.exp` (lowers to the device intrinsic) |
 | `__shared__` staging for cross-warp merge | shared `TileTensor` (`AddressSpace.SHARED`) |
 
@@ -46,7 +50,12 @@ Second, "fewer passes" is not automatically faster. On the **narrow** 16384×102
 rows the naive three-pass kernel (804) actually *beats* online (730): with only 1024
 columns the extra read is cheap next to the online combine's per-thread `exp`
 bookkeeping. `online` only pays off once the row is **wide** enough (4096, 16384) to
-amortize the streaming reduction, where it leads by 15 to 30%.
+amortize the streaming reduction, where it leads by 15 to 30%. The **Mojo** naive
+variant reproduces this crossover (its naive edges its own online on 16384×1024 and
+loses on the wider shapes), which confirms the effect is algorithmic, not a
+language artifact. The locked-clock Mojo-naive column is a pending re-measure; the
+CSV currently carries Mojo `online` only, and the naive numbers behind this note
+were taken unlocked, so they are not published as results.
 
 `torch.softmax` fills the vendor column when the optional torch build is installed
 (`bench/vendor_softmax.py`); see the repo README setup step.
