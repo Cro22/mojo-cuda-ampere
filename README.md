@@ -110,9 +110,10 @@ driver exposing the 3090. You need **CUDA** (`nvcc`) and a **uv** environment wi
 uv sync
 
 # 2. (recommended) pin GPU clocks so the medians are not chasing the boost
-#    governor. Under WSL the GPU is owned by the Windows host, so run this once in
-#    an Administrator shell (reset afterwards with -rgc / -rmc):
-#      nvidia-smi -lgc 1695,1695 && nvidia-smi -lmc 9751
+#    governor. Under WSL this MUST be issued from an Administrator shell on the
+#    Windows host, not inside WSL (the guest does not own the GPU) -- see the
+#    "Locking GPU clocks under WSL" section of docs/methodology.md for why:
+#      nvidia-smi -lgc 1695,1695 && nvidia-smi -lmc 9751   (reset: -rgc / -rmc)
 
 # 3. Build + run everything -> results/results.csv + results/run-env.txt
 ./bench/run.sh

@@ -61,15 +61,52 @@ Implementations:
 
 ### Clocks (DVFS)
 
-GPU boost is the dominant source of run-to-run variance. `bench/run.sh` pins the
-SM and memory clocks (`nvidia-smi -lgc/-lmc`) before measuring so the reported
-distribution reflects the kernel, not the governor. Locking needs elevated
-privileges; under WSL the GPU is owned by the Windows host driver, so the lock is
-issued from an Administrator shell (see `run.sh` header). If the lock is denied
-the harness records `clocks_locked: no` in `results/run-env.txt` and continues -
-the reported IQR then simply widens to include the DVFS spread rather than hiding
-it. The actual SM clock is sampled every 250 ms during the run and its
-min/median/max are recorded in the same file.
+GPU boost is the dominant source of run-to-run variance, so `bench/run.sh` pins
+the SM and memory clocks before measuring and samples the actual SM clock every
+250 ms, recording its min/median/max plus a `clocks_locked: yes|no` flag in
+`results/run-env.txt`. Pinning the clocks under WSL has a non-obvious catch that
+gets its own section below.
+
+## Locking GPU clocks under WSL (why it needs an Administrator shell on Windows)
+
+Locking the clocks is what turns "median of 30" from a slogan into a real number,
+and it also removes an *ordering bias*: the harness runs the CUDA variant before
+the Mojo one within each kernel, so on a boosting card the compute-heavy 4096³
+Mojo run lands on a hotter, already-throttled GPU and looks ~13% slower than it
+is purely because it ran second. Pinning the clock makes numerator and
+denominator share one frequency.
+
+The catch, which is barely documented anywhere: **under WSL2 you cannot lock the
+clocks from inside the Linux guest.** WSL sees the GPU through a paravirtualized
+passthrough (`/dev/dxg`); the real driver and all hardware *management* state live
+on the Windows host. `nvidia-smi` inside Ubuntu can happily *query* the device,
+but a management call that mutates hardware state, `nvidia-smi -lgc` (lock graphics
+clock), `-lmc` (lock memory clock), or `-pm` (persistence mode), is either ignored
+or fails with a "not supported" / insufficient-permission error, because the guest
+does not own the device.
+
+So the lock has to be issued **host-side, from an elevated Windows shell**
+(PowerShell or cmd *Run as administrator*), using the Windows `nvidia-smi`. The
+WSL guest then simply *sees* the already-pinned clocks:
+
+```powershell
+# In an ADMINISTRATOR PowerShell/cmd on Windows (NOT inside WSL):
+nvidia-smi -lgc 1695,1695     # pin the SM / graphics clock to the 3090 boost bin
+nvidia-smi -lmc 9751          # pin the memory clock (optional; support varies on GeForce)
+
+# ... run ./bench/run.sh inside WSL while the lock holds ...
+
+nvidia-smi -rgc               # release the graphics-clock lock afterwards
+nvidia-smi -rmc               # release the memory-clock lock
+```
+
+The lock persists for the driver session (until you reset it or reboot). Verify it
+took, from either side, with `nvidia-smi -q -d CLOCK`. If you cannot or do not lock
+(no admin rights, a laptop, a cloud box that forbids it), the harness does not
+lie about it: it records `clocks_locked: no` and continues, and the reported IQR
+simply widens to include the DVFS spread instead of hiding it behind a single
+lucky sample. A locked run and an honestly-labeled unlocked run are both valid;
+an unlocked run *presented as if it were locked* is the thing to avoid.
 
 ## Vendor references
 
