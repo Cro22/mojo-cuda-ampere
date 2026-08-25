@@ -62,38 +62,38 @@ Bandwidth-bound kernels (fraction of 936 GB/s):
 
 | kernel / variant | GB/s | % of peak |
 |------------------|-----:|----------:|
-| reduction · CUDA warp_shfl (256M) | 891 | **95%** |
-| reduction · Mojo warp_shfl (256M) | 889 | 95% |
-| reduction · CUB `DeviceReduce` (256M) | 888 | 95% |
-| softmax · CUDA online (16384×1024) | 730 | 78% |
-| softmax · Mojo online (16384×1024) | 713 | 76% |
+| reduction · CUDA warp_shfl (256M) | 889 | **95%** |
+| reduction · Mojo warp_shfl (256M) | 895 | 96% |
+| reduction · CUB `DeviceReduce` (256M) | 895 | 96% |
+| softmax · CUDA online (16384×1024) | 722 | 77% |
+| softmax · Mojo online (16384×1024) | 728 | 78% |
 
-The three reduction rows are within ~3 GB/s of each other, i.e. the hand-written
+The three reduction rows are within ~6 GB/s of each other, i.e. the hand-written
 kernels (both languages) are indistinguishable from NVIDIA's own library at the bus.
 
 Compute-bound kernel (fraction of 35.6 TFLOP/s, the *idealized* fp32 peak):
 
 | kernel / variant (4096³) | GFLOP/s | % of fp32 peak |
 |--------------------------|--------:|---------------:|
-| cuBLAS | 22 897 | **64%** |
-| CUDA regblock | 16 442 | 46% |
-| Mojo regblock | 13 099 | 37% |
-| CUDA / Mojo tiled | ~2 300 | ~6% |
+| cuBLAS | 23 385 | **66%** |
+| CUDA regblock | 17 370 | 49% |
+| Mojo regblock | 13 780 | 39% |
+| CUDA / Mojo tiled | ~2 500 | ~7% |
 
-(At 1024³ the Mojo regblock reaches 8 491 GFLOP/s vs CUDA's 9 279 (**92%**), where
+(At 1024³ the Mojo regblock reaches 8 497 GFLOP/s vs CUDA's 9 279 (**92%**), where
 the smaller working set makes the vectorized loads count for more; the gap widens to
 ~80% at 2048³/4096³.)
 
 These percentages are lower than an earlier draft claimed (which read "55% / 76%")
 because that draft divided a *boosted* ~2 GHz numerator by a *1695 MHz* denominator.
-With the clock pinned on both sides the honest figure is 46% (CUDA) / 64% (cuBLAS)
+With the clock pinned on both sides the honest figure is 49% (CUDA) / 66% (cuBLAS)
 of the idealized peak, and, per the FP32/INT32 caveat above, meaningfully higher
 against the peak the kernel can actually sustain.
 
 ## Reading the gaps
 
-- **Reduction** saturates the bus in both languages (95%), and matches
-  `cub::DeviceReduce` to within ~3 GB/s. The `float4`-vectorized grid-stride loop
+- **Reduction** saturates the bus in both languages (95-96%), and matches
+  `cub::DeviceReduce` to within ~6 GB/s. The `float4`-vectorized grid-stride loop
   issues wide, fully-coalesced transactions; the warp-shuffle reduction adds
   negligible overhead. The Mojo kernel uses the same trick
   (`input.ptr.unsafe_load[width=4]`) and their IQRs overlap, so at 256M the two are
@@ -103,14 +103,14 @@ against the peak the kernel can actually sustain.
 - **Softmax** cannot reach the reduction's efficiency because it both reads *and*
   writes the matrix and evaluates `exp` twice per element; the online variant wins
   on wide rows by reading the row 2x instead of 3x. On 16384x1024 the two languages
-  are indistinguishable (713 vs 730 GB/s, overlapping IQRs); only the very wide
-  1024x16384 shape opens a real ~7% gap, where a shorter kernel makes the per-block
+  are indistinguishable (728 vs 722 GB/s, overlapping IQRs); only the very wide
+  1024x16384 shape opens a real ~8% gap, where a shorter kernel makes the per-block
   reduction overhead a larger fraction of the runtime. For narrow rows the naive
   three-pass version can even edge the online one ahead.
 
 - **Matmul** is the widest gap. cuBLAS uses hand-tuned SASS, larger tiles, double
   buffering and (for other dtypes) tensor cores; the register-blocked kernel here is
-  a clean textbook implementation at ~46% of the idealized peak. Both the CUDA and
+  a clean textbook implementation at ~49% of the idealized peak. Both the CUDA and
   Mojo kernels stage A/B through `float4`-vectorized global loads and a transposed
   `As` tile; the compute inner loop (8x8 register tile) is identical. That parity
   brings Mojo to **92% of CUDA at 1024³** and **~80% at 2048³/4096³**. The residual

@@ -28,20 +28,20 @@ waves, independent of array size.
 
 | impl · variant | GB/s | % of 936 |
 |----------------|-----:|---------:|
-| CUDA warp_shfl        | 891 | 95% |
-| Mojo warp_shfl        | 889 | 95% |
-| CUB `DeviceReduce`    | 888 | 95% |
-| CUDA naive            | ~258 | ~28% |
+| CUDA warp_shfl        | 889 | 95% |
+| Mojo warp_shfl        | 895 | 96% |
+| CUB `DeviceReduce`    | 895 | 96% |
+| CUDA naive            | ~292 | ~31% |
 
-The three optimized rows are within ~3 GB/s: the hand-written kernels (both
+The three optimized rows are within ~6 GB/s: the hand-written kernels (both
 languages) are **indistinguishable from each other and from NVIDIA's own CUB**
-reduction at 256M, all at ~95% of the bus. Their IQRs overlap, so the small ordering
+reduction at 256M, all at 95-96% of the bus. Their IQRs overlap, so the small ordering
 between them is noise, not a result.
 
 ## Optimization story
 
 The repo ships the two endpoints as separate variants (`naive` and `warp_shfl`), so
-the measured jump is **~258 -> 891 GB/s at 256M, a ~3.5x gain moving the exact same
+the measured jump is **~292 -> 889 GB/s at 256M, a ~3x gain moving the exact same
 bytes**. The `warp_shfl` variant folds three independent changes into that gain; the
 attribution below is by construction (each addresses a specific stall), not four
 separately benchmarked kernels:
@@ -67,7 +67,7 @@ not grant by default.
 
 **The penalty holds across generations.** On Turing (T4, `sm_75`) the same naive
 kernel runs ~41-83 GB/s against `warp_shfl`'s ~242-270, a **3-6x** gap, versus
-~2.4-3.5x on Ampere (naive ~258-290 vs 655-891). Not vectorizing and not using the
+~2.5-3x on Ampere (naive ~269-292 vs 673-889). Not vectorizing and not using the
 shuffle costs the same order of magnitude regardless of architecture: it is a
 property of the memory system, not of one GPU. (The Turing figures are an
 unlocked-clock cross-check on all three variants passing correctness at `sm_75`,

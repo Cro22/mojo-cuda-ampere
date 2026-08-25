@@ -1,7 +1,7 @@
 # Benchmark run environment
-date_utc:      2026-08-25T01:17:05Z
+date_utc:      2026-08-25T03:02:44Z
 gpu:           NVIDIA GeForce RTX 3090
 driver:        610.62
 nvcc:          release 13.3
 clocks_locked: yes (pre-locked externally)
-sm_clock_obs:  min=1695 median=1695 max=1695 (n=67)   # MHz, sampled every 250ms during the run
+sm_clock_obs:  min=1695 median=1695 max=1695 (n=76)   # MHz, sampled every 250ms during the run

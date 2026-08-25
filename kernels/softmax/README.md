@@ -34,28 +34,26 @@ symmetric across languages.
 
 ## Results (GB/s, clocks locked @1695 MHz, median of 30)
 
-| shape | CUDA online | Mojo online | Mojo/CUDA | CUDA naive | verdict |
-|-------|------------:|------------:|:---------:|-----------:|---------|
-| 16384×1024 | 730 | 713 | 97.6% | 804 | **indistinguishable** (IQRs overlap) |
-| 4096×4096  | 570 | 556 | 97.5% | 488 | CUDA +2% (just outside IQR) |
-| 1024×16384 | 535 | 498 | 93.2% | 406 | CUDA +7% (real gap) |
+| shape | CUDA online | Mojo online | Mojo/CUDA | CUDA naive | Mojo naive | torch | verdict |
+|-------|------------:|------------:|:---------:|-----------:|-----------:|------:|---------|
+| 16384×1024 | 722 | 728 | 100.8% | 804 | 745 | 824 | **indistinguishable** (IQRs overlap) |
+| 4096×4096  | 575 | 567 | 98.6% | 480 | 447 | 780 | **indistinguishable** (IQRs touch) |
+| 1024×16384 | 544 | 504 | 92.6% | 412 | 387 | 643 | CUDA +8% (real gap) |
 
 Two things fall out of the locked-clock medians. First, on the square and
 row-heavy shapes CUDA and Mojo are a **dead heat**: the online kernels are the same
 kernel expressed twice and they land on top of each other. The only real gap is the
 very wide 1024×16384 shape, where a shorter kernel makes the per-block `(max,sum)`
-reduction a larger fraction of the runtime and CUDA's ~7% edge survives the IQR.
+reduction a larger fraction of the runtime and CUDA's ~8% edge survives the IQR.
 
 Second, "fewer passes" is not automatically faster. On the **narrow** 16384×1024
-rows the naive three-pass kernel (804) actually *beats* online (730): with only 1024
+rows the naive three-pass kernel (804) actually *beats* online (722): with only 1024
 columns the extra read is cheap next to the online combine's per-thread `exp`
 bookkeeping. `online` only pays off once the row is **wide** enough (4096, 16384) to
-amortize the streaming reduction, where it leads by 15 to 30%. The **Mojo** naive
-variant reproduces this crossover (its naive edges its own online on 16384×1024 and
-loses on the wider shapes), which confirms the effect is algorithmic, not a
-language artifact. The locked-clock Mojo-naive column is a pending re-measure; the
-CSV currently carries Mojo `online` only, and the naive numbers behind this note
-were taken unlocked, so they are not published as results.
+amortize the streaming reduction, where it leads by 20 to 30%. The **Mojo** naive
+variant (now in the table) reproduces this crossover: its naive (745) edges its own
+online (728) on 16384×1024 and loses on the wider shapes, which confirms the effect
+is algorithmic, not a language artifact.
 
 `torch.softmax` fills the vendor column when the optional torch build is installed
 (`bench/vendor_softmax.py`); see the repo README setup step.

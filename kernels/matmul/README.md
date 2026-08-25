@@ -35,11 +35,11 @@ metric is GFLOP/s against the 35.6 TFLOP/s fp32 peak. `2·M·N·K` flops.
 
 | size | CUDA regblock | Mojo regblock | Mojo/CUDA | cuBLAS |
 |------|-------------:|-------------:|:---------:|-------:|
-| 1024³ | 9 279 | 8 491 | **91.5%** | 18 079 |
-| 2048³ | 14 546 | 11 563 | 79.5% | 22 672 |
-| 4096³ | **16 442** | **13 099** | 79.7% | 22 897 |
+| 1024³ | 9 279 | 8 497 | **91.6%** | 18 118 |
+| 2048³ | 14 526 | 11 507 | 79.2% | 22 520 |
+| 4096³ | **17 370** | **13 780** | 79.3% | 23 385 |
 
-Register blocking is a ~7x jump over the simple 32×32 tiled kernel (~2 300 GFLOP/s).
+Register blocking is a ~7x jump over the simple 32×32 tiled kernel (~2 400 GFLOP/s).
 With `float4`-vectorized loads on **both** sides, the Mojo/CUDA ratio is **92% at
 1024³** and settles at **~80% at 2048³ and 4096³**. The residual gap is **double
 buffering** (overlapping the next tile's global loads with the current tile's FMAs)

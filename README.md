@@ -19,20 +19,20 @@ noise; where they do not overlap the gap is real and quoted. Raw rows and the
 
 | Kernel | Metric | Best CUDA | Best Mojo | Mojo / CUDA | Vendor ref | Verdict |
 |--------|--------|----------:|----------:|:-----------:|-----------:|---------|
-| reduction (256M f32)   | GB/s    | **891** (warp_shfl) | 889 (warp_shfl) | 99.7% | 888 (CUB)     | **indistinguishable** |
-| softmax (16384×1024)   | GB/s    | **730** (online)    | 713 (online)    | 97.6% | torch (opt.)  | **indistinguishable** |
-| softmax (1024×16384)   | GB/s    | **535** (online)    | 498 (online)    | 93.2% | torch (opt.)  | CUDA +7% |
-| matmul (1024³ f32)     | GFLOP/s | **9 279** (regblock)| 8 491 (regblock)| 91.5% | cuBLAS 18 079 | CUDA +9% |
-| matmul (4096³ f32)     | GFLOP/s | **16 442** (regblock)| 13 099 (regblock)| 79.7% | cuBLAS 22 897 | CUDA +25% |
+| reduction (256M f32)   | GB/s    | **889** (warp_shfl) | 895 (warp_shfl) | 100.7% | 895 (CUB)    | **indistinguishable** |
+| softmax (16384×1024)   | GB/s    | **722** (online)    | 728 (online)    | 100.8% | 824 (torch)  | **indistinguishable** |
+| softmax (1024×16384)   | GB/s    | **544** (online)    | 504 (online)    | 92.6% | 643 (torch)   | CUDA +8% |
+| matmul (1024³ f32)     | GFLOP/s | **9 279** (regblock)| 8 497 (regblock)| 91.6% | cuBLAS 18 118 | CUDA +9% |
+| matmul (4096³ f32)     | GFLOP/s | **17 370** (regblock)| 13 780 (regblock)| 79.3% | cuBLAS 23 385 | CUDA +26% |
 
 The picture splits cleanly by what limits each kernel:
 
 - **Memory-bound** (reduction, softmax): both languages sit near the 936 GB/s
   GDDR6X ceiling and are **statistically indistinguishable** at the sizes that
   saturate the bus. The hand-written Mojo reduction matches both the hand-written
-  CUDA kernel *and* `cub::DeviceReduce` to within ~3 GB/s at 256M (all ~95% of the
+  CUDA kernel *and* `cub::DeviceReduce` to within ~6 GB/s at 256M (all 95-96% of the
   bus). Softmax is a dead heat on square/wide-block shapes; only the very wide
-  1024×16384 shape opens a real ~7% gap, where the per-block reduction overhead is
+  1024×16384 shape opens a real ~8% gap, where the per-block reduction overhead is
   a larger share of a short kernel.
 - **Compute-bound** (matmul): once both sides stage A/B through `float4`-vectorized
   loads with an identical 8×8 register-tile inner loop, Mojo reaches **92% of the
@@ -64,12 +64,12 @@ Cost to push **1B tokens through one 4096-wide `float32` projection** (a single
 
 | impl | GFLOP/s | wall time | cost / 1B tokens | vs CUDA |
 |------|--------:|----------:|-----------------:|--------:|
-| cuBLAS        | 22 897 | 24.5 min | **$0.090** | 0.72× |
-| CUDA regblock | 16 442 | 34.1 min | **$0.125** | 1.00× |
-| Mojo regblock | 13 099 | 42.8 min | **$0.157** | 1.25× |
+| cuBLAS        | 23 385 | 23.9 min | **$0.088** | 0.74× |
+| CUDA regblock | 17 370 | 32.2 min | **$0.118** | 1.00× |
+| Mojo regblock | 13 780 | 40.6 min | **$0.149** | 1.26× |
 
-So on this fp32 kernel the Mojo implementation costs **~25% more per token than the
-hand-written CUDA one, and ~75% more than cuBLAS**, purely from the throughput gap.
+So on this fp32 kernel the Mojo implementation costs **~26% more per token than the
+hand-written CUDA one, and ~70% more than cuBLAS**, purely from the throughput gap.
 On the **memory-bound** kernels the implementations are within measurement noise, so
 they cost the same to run.
 
