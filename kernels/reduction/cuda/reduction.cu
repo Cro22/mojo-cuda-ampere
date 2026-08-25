@@ -10,6 +10,7 @@
 // Reduction is a pure memory-bound kernel: the metric that matters is achieved
 // DRAM bandwidth (gbytes_s), not FLOP/s. gflops here counts the N-1 adds.
 #include "../../../bench/bench.cuh"
+#include <cub/device/device_reduce.cuh>   // vendor reference: cub::DeviceReduce
 #include <vector>
 #include <random>
 #include <string>
@@ -99,14 +100,13 @@ int main(int argc, char** argv) {
             auto launch = [&]() {
                 reduce_naive<<<blocks_naive, BLOCK>>>(d_in, d_out, n);
             };
-            double ms = bench_time_ms(launch);
+            BenchStat st = bench_time(launch);
             // finish the partials on the host for correctness (cheap vs kernel)
             CUDA_CHECK(cudaMemcpy(partials.data(), d_out, blocks_naive * sizeof(float),
                                   cudaMemcpyDeviceToHost));
             double got = 0.0; for (float p : partials) got += p;
             int correct = approx_equal(got, ref, 1e-3);
-            bench_emit("reduction", "naive", "f32", n, 1, 1, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("reduction", "naive", "f32", n, 1, 1, st, flops, bytes, correct);
         }
 
         // ---- warp_shfl ----
@@ -123,12 +123,34 @@ int main(int argc, char** argv) {
                 CUDA_CHECK(cudaMemsetAsync(d_out, 0, sizeof(float)));
                 reduce_warp_shfl<<<grid, BLOCK>>>(d_in, d_out, n);
             };
-            double ms = bench_time_ms(launch);
+            BenchStat st = bench_time(launch);
             float got = 0.0f;
             CUDA_CHECK(cudaMemcpy(&got, d_out, sizeof(float), cudaMemcpyDeviceToHost));
             int correct = approx_equal(got, ref, 1e-3);
-            bench_emit("reduction", "warp_shfl", "f32", n, 1, 1, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("reduction", "warp_shfl", "f32", n, 1, 1, st, flops, bytes, correct);
+        }
+
+        // ---- cub (vendor reference) ----
+        // cub::DeviceReduce::Sum is NVIDIA's tuned library reduction; it is the
+        // "how close to the vendor?" yardstick for the hand-written kernels.
+        {
+            float* d_sum;
+            CUDA_CHECK(cudaMalloc(&d_sum, sizeof(float)));
+            void*  d_temp = nullptr;
+            size_t temp_bytes = 0;
+            // First call with d_temp == nullptr just sizes the scratch buffer.
+            cub::DeviceReduce::Sum(d_temp, temp_bytes, d_in, d_sum, n);
+            CUDA_CHECK(cudaMalloc(&d_temp, temp_bytes));
+            auto launch = [&]() {
+                cub::DeviceReduce::Sum(d_temp, temp_bytes, d_in, d_sum, n);
+            };
+            BenchStat st = bench_time(launch);
+            float got = 0.0f;
+            CUDA_CHECK(cudaMemcpy(&got, d_sum, sizeof(float), cudaMemcpyDeviceToHost));
+            int correct = approx_equal(got, ref, 1e-3);
+            bench_emit("reduction", "cub", "f32", n, 1, 1, st, flops, bytes, correct);
+            CUDA_CHECK(cudaFree(d_temp));
+            CUDA_CHECK(cudaFree(d_sum));
         }
 
         CUDA_CHECK(cudaFree(d_in));
