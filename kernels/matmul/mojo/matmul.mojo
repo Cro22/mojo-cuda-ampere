@@ -10,6 +10,7 @@
 # output cells (a full CPU matmul at 4096^3 would take minutes).
 from std.math import ceildiv
 from std.sys import has_accelerator
+from std.sys.info import has_nvidia_gpu_accelerator
 from std.gpu import thread_idx, block_idx
 from max.gpu.sync import barrier
 from max.gpu.host import DeviceContext
@@ -68,13 +69,23 @@ def mm_tiled[LT: TensorLayout](
         k0 += T
     C[row, col] = rebind[C.ElementType](acc)
 
-# ---- regblock (128x128 tile, 8x8 register tile) ---------------------------
-comptime BM = 128
-comptime BN = 128
+# ---- regblock: device-derived tile config (see docs/portability.md) -------
+# The register tile (TM x TN) is the perf knob that must track the register
+# file: 8x8 = 64 accumulators/thread is calibrated for GA102's 64K regs/SM; on a
+# smaller register file that spills to local memory and falls off a cliff. It is
+# selected HOST-side from has_nvidia_gpu_accelerator() -- is_nvidia_gpu() reports
+# CPU at module scope on this toolchain (verified), so it cannot pick the config.
+# Both the host launch dims (grid/block) and the kernel's shared-memory + unroll
+# bounds read these SAME comptime constants, so they cannot drift apart.
+# Invariant the cooperative float4 loader relies on: BM == BN and, since one
+# float4 is loaded per thread, NTHREADS == BM*BK//4 == BK*BN//4.
+comptime _NV = has_nvidia_gpu_accelerator()
+comptime BM = 128 if _NV else 64
+comptime BN = 128 if _NV else 64
 comptime BK = 8
 comptime TM = 8
-comptime TN = 8
-comptime NTHREADS = (BM * BN) // (TM * TN)      # 256
+comptime TN = 8 if _NV else 4                    # 64 accums on NVIDIA, 32 elsewhere
+comptime NTHREADS = (BM * BN) // (TM * TN)       # 256 on NVIDIA, 128 elsewhere
 
 def mm_regblock[LT: TensorLayout](
     A: TileTensor[dtype, LT, MutAnyOrigin],
