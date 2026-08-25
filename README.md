@@ -59,10 +59,10 @@ case, the only one where the languages actually differ, and price it. A 3090 ren
 for roughly **$0.22/hr** on community clouds (mid-2026 spot; the numbers below scale
 linearly with whatever price you pay).
 
-Cost to push **1M tokens through one 4096-wide `float32` projection** (a single
-`(1e6 × 4096) · (4096 × 4096)` SGEMM = 33.6 PFLOP), at the measured 4096³ rates:
+Cost to push **1B tokens through one 4096-wide `float32` projection** (a single
+`(1e9 × 4096) · (4096 × 4096)` SGEMM = 33.6 PFLOP), at the measured 4096³ rates:
 
-| impl | GFLOP/s | wall time | cost / 1M tokens | vs CUDA |
+| impl | GFLOP/s | wall time | cost / 1B tokens | vs CUDA |
 |------|--------:|----------:|-----------------:|--------:|
 | cuBLAS        | 22 897 | 24.5 min | **$0.090** | 0.72× |
 | CUDA regblock | 16 442 | 34.1 min | **$0.125** | 1.00× |
