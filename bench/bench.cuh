@@ -46,10 +46,10 @@ static inline void bench_print_header() {
 static inline double bench_pct(const std::vector<double>& s, double q) {
     if (s.empty()) return 0.0;
     if (s.size() == 1) return s[0];
-    double pos = q * (double)(s.size() - 1);
-    size_t lo = (size_t)pos;
+    double pos = q * static_cast<double>(s.size() - 1);
+    size_t lo = static_cast<size_t>(pos);
     if (lo + 1 >= s.size()) return s.back();
-    double frac = pos - (double)lo;
+    double frac = pos - static_cast<double>(lo);
     return s[lo] * (1.0 - frac) + s[lo + 1] * frac;
 }
 
@@ -90,7 +90,7 @@ static BenchStat bench_time(F&& launch, int reps = 30, int warmup = 5) {
         CUDA_CHECK(cudaEventSynchronize(stop));
         float ms = 0.0f;
         CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        t.push_back((double)ms);
+        t.push_back(static_cast<double>(ms));
     }
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

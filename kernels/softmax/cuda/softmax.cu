@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
             const float* row = h.data() + r * N;
             float mx = -INFINITY; for (long j = 0; j < N; ++j) mx = std::max(mx, row[j]);
             double sm = 0; for (long j = 0; j < N; ++j) sm += std::exp(row[j] - mx);
-            for (long j = 0; j < N; ++j) ref[r * N + j] = (float)(std::exp(row[j] - mx) / sm);
+            for (long j = 0; j < N; ++j) ref[r * N + j] = static_cast<float>(std::exp(row[j] - mx) / sm);
         }
 
         float *d_in, *d_out;

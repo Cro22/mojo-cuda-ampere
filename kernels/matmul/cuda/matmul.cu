@@ -163,9 +163,9 @@ int main(int argc, char** argv) {
             CUDA_CHECK(cudaMemcpy(hC.data(), dC, total * sizeof(float), cudaMemcpyDeviceToHost));
             double num = 0, den = 0;
             for (long i = 0; i < total; ++i) {
-                double d = (double)hC[i] - (double)ref[i];
+                double d = static_cast<double>(hC[i]) - static_cast<double>(ref[i]);
                 num += d * d;
-                den += (double)ref[i] * (double)ref[i];
+                den += static_cast<double>(ref[i]) * static_cast<double>(ref[i]);
             }
             return std::sqrt(num / den) <= 1e-4;
         };

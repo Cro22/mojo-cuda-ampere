@@ -21,7 +21,7 @@ static constexpr int BLOCK = 256;
 __global__ void reduce_naive(const float* __restrict__ in, float* __restrict__ out, long n) {
     __shared__ float s[BLOCK];
     long tid = threadIdx.x;
-    long i = (long)blockIdx.x * blockDim.x + tid;
+    long i = static_cast<long>(blockIdx.x) * blockDim.x + tid;
     s[tid] = (i < n) ? in[i] : 0.0f;
     __syncthreads();
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
@@ -43,14 +43,14 @@ __global__ void reduce_warp_shfl(const float* __restrict__ in, float* __restrict
     float sum = 0.0f;
     long n4 = n / 4;
     const float4* in4 = reinterpret_cast<const float4*>(in);
-    for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < n4;
-         i += (long)gridDim.x * blockDim.x) {
+    for (long i = static_cast<long>(blockIdx.x) * blockDim.x + threadIdx.x; i < n4;
+         i += static_cast<long>(gridDim.x) * blockDim.x) {
         float4 v = in4[i];
         sum += v.x + v.y + v.z + v.w;
     }
     // tail elements not covered by the float4 body
-    for (long i = n4 * 4 + (long)blockIdx.x * blockDim.x + threadIdx.x; i < n;
-         i += (long)gridDim.x * blockDim.x)
+    for (long i = n4 * 4 + static_cast<long>(blockIdx.x) * blockDim.x + threadIdx.x; i < n;
+         i += static_cast<long>(gridDim.x) * blockDim.x)
         sum += in[i];
 
     // Block reduction: warp-shuffle within each warp, then across warps.
@@ -88,11 +88,11 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaMalloc(&d_in, n * sizeof(float)));
         CUDA_CHECK(cudaMemcpy(d_in, h.data(), n * sizeof(float), cudaMemcpyHostToDevice));
 
-        int blocks_naive = (int)((n + BLOCK - 1) / BLOCK);
+        int blocks_naive = static_cast<int>((n + BLOCK - 1) / BLOCK);
         CUDA_CHECK(cudaMalloc(&d_out, blocks_naive * sizeof(float)));
 
-        double bytes = (double)n * sizeof(float);
-        double flops = (double)(n - 1);
+        double bytes = static_cast<double>(n) * sizeof(float);
+        double flops = static_cast<double>(n - 1);
 
         // ---- naive ----
         {
