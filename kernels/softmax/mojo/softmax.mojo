@@ -102,8 +102,10 @@ def softmax_online[LT: TensorLayout](
         ss[wid] = wr[1]
     barrier()
 
-    var row_max: Float32 = -1.0e30
-    var row_sum: Float32 = 0.0
+    # Final reduction across the NWARPS partials in warp 0. The per-thread
+    # streaming seeds (m=-inf, s=0) live above in `m`/`s`; row_max/row_sum are
+    # just the broadcast holders, so declare them at the point they are read
+    # (sm[0]/ss[0] after the barrier) rather than seeding a value nothing uses.
     if wid == 0:
         var mm = rebind[Float32](sm[lane]) if lane < NWARPS else Float32(-1.0e30)
         var ssum = rebind[Float32](ss[lane]) if lane < NWARPS else Float32(0.0)
@@ -112,8 +114,8 @@ def softmax_online[LT: TensorLayout](
             sm[0] = fr[0]
             ss[0] = fr[1]
     barrier()
-    row_max = rebind[Float32](sm[0])
-    row_sum = rebind[Float32](ss[0])
+    var row_max = rebind[Float32](sm[0])
+    var row_sum = rebind[Float32](ss[0])
 
     # normalize
     var inv = 1.0 / row_sum
