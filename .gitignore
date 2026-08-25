@@ -1,5 +1,6 @@
 # --- build artifacts ---------------------------------------------------------
-bench/build/          # compiled CUDA binaries (make -C bench)
+# compiled CUDA binaries (make -C bench)
+bench/build/
 *.o
 *.obj
 *.out
@@ -13,7 +14,8 @@ a.out
 *.mojopkg
 
 # --- profiling ---------------------------------------------------------------
-*.ncu-rep             # Nsight Compute raw reports (large); keep the .txt summaries
+# Nsight Compute/Systems raw reports (large); keep the .txt summaries
+*.ncu-rep
 *.nsys-rep
 *.qdrep
 
@@ -22,7 +24,7 @@ a.out
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
-# NOTE: uv.lock IS committed on purpose (reproducible env) — do not ignore it.
+# NOTE: uv.lock IS committed on purpose (reproducible env); do not ignore it.
 
 # --- editors / OS ------------------------------------------------------------
 .idea/
@@ -32,7 +34,10 @@ __pycache__/
 Thumbs.db
 
 # --- local tool state --------------------------------------------------------
-.claude/                      # Claude Code local state / permissions, not shared
+# Claude Code local state / permissions, not shared
+.claude/
+# msys/mingw temp scratch files
+.msys*
 
 # --- results -----------------------------------------------------------------
 # Tracked: results/results.csv and results/*.png (they are the deliverable).
