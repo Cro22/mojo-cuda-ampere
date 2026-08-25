@@ -18,6 +18,27 @@ comptime dtype = DType.float32
 comptime BLOCK = 256
 comptime NWARPS = BLOCK // 32
 
+# --- timing statistics: median + inter-quartile range over N samples ---------
+def _isort(mut s: List[Float64]):
+    for i in range(1, len(s)):
+        var key = s[i]
+        var j = i - 1
+        while j >= 0 and s[j] > key:
+            s[j + 1] = s[j]
+            j -= 1
+        s[j + 1] = key
+
+def _pctile(s: List[Float64], q: Float64) -> Float64:
+    var nm1 = len(s) - 1
+    if nm1 <= 0:
+        return s[0]
+    var pos = q * Float64(nm1)
+    var lo = Int(pos)
+    if lo >= nm1:
+        return s[nm1]
+    var frac = pos - Float64(lo)
+    return s[lo] * (1.0 - frac) + s[lo + 1] * frac
+
 # online-softmax combine of two partial (max, sum) reductions
 @always_inline
 def combine(m: Float32, s: Float32, m2: Float32, s2: Float32) -> Tuple[Float32, Float32]:
@@ -148,13 +169,22 @@ def main() raises:
                 den += Float64(refh[i]) * Float64(refh[i])
         var correct = 1 if (num / den) ** 0.5 <= 1e-4 else 0
 
-        var reps = 50
-        var nanos = ctx.execution_time(run, reps)
-        var time_ms = Float64(nanos) / Float64(reps) / 1.0e6
+        comptime WARMUP = 5
+        comptime REPS = 30
+        for _ in range(WARMUP):
+            _ = ctx.execution_time(run, 1)
+        var samples: List[Float64] = []
+        for _ in range(REPS):
+            var ns = ctx.execution_time(run, 1)
+            samples.append(Float64(ns) / 1.0e6)
+        _isort(samples)
+        var median_ms = _pctile(samples, 0.5)
+        var p25_ms = _pctile(samples, 0.25)
+        var p75_ms = _pctile(samples, 0.75)
 
         var bytes = 2.0 * Float64(total) * 4.0
         var flops = 5.0 * Float64(total)
-        var gflops = flops / (time_ms * 1.0e6)
-        var gbytes = bytes / (time_ms * 1.0e6)
-        print("softmax,mojo,online,f32,", M, ",", N, ",1,", time_ms, ",",
-              gflops, ",", gbytes, ",", correct, sep="")
+        var gflops = flops / (median_ms * 1.0e6)
+        var gbytes = bytes / (median_ms * 1.0e6)
+        print("softmax,mojo,online,f32,", M, ",", N, ",1,", median_ms, ",", p25_ms,
+              ",", p75_ms, ",", REPS, ",", gflops, ",", gbytes, ",", correct, sep="")

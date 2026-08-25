@@ -130,21 +130,21 @@ int main(int argc, char** argv) {
 
     for (int Nsz : sizes) {
         int M = Nsz, N = Nsz, K = Nsz;
-        long total = (long)M * N;
-        std::vector<float> hA((long)M * K), hB((long)K * N), hC(total);
+        long total = static_cast<long>(M) * N;
+        std::vector<float> hA(static_cast<long>(M) * K), hB(static_cast<long>(K) * N), hC(total);
         for (auto& x : hA) x = dist(rng);
         for (auto& x : hB) x = dist(rng);
 
         float *dA, *dB, *dC, *dRef;
-        CUDA_CHECK(cudaMalloc(&dA, (long)M * K * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&dB, (long)K * N * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&dA, static_cast<long>(M) * K * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&dB, static_cast<long>(K) * N * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&dC, total * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&dRef, total * sizeof(float)));
-        CUDA_CHECK(cudaMemcpy(dA, hA.data(), (long)M * K * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(dB, hB.data(), (long)K * N * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(dA, hA.data(), static_cast<long>(M) * K * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(dB, hB.data(), static_cast<long>(K) * N * sizeof(float), cudaMemcpyHostToDevice));
 
         double flops = 2.0 * M * N * K;
-        double bytes = ((double)M * K + (double)K * N + total) * sizeof(float);
+        double bytes = (static_cast<double>(M) * K + static_cast<double>(K) * N + total) * sizeof(float);
         float alpha = 1.0f, beta = 0.0f;
 
         // Reference via cuBLAS (row-major trick: C = A*B computed as C^T).
@@ -174,20 +174,18 @@ int main(int argc, char** argv) {
         if (Nsz <= 2048) {
             dim3 blk(16, 16), grd((N + 15) / 16, (M + 15) / 16);
             auto launch = [&]() { mm_naive<<<grd, blk>>>(dA, dB, dC, M, N, K); };
-            double ms = bench_time_ms(launch, 20, 3);
+            BenchStat st = bench_time(launch, 20, 3);   // naive is slow; fewer reps
             int correct = check();
-            bench_emit("matmul", "naive", "f32", M, N, K, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("matmul", "naive", "f32", M, N, K, st, flops, bytes, correct);
         }
         // tiled
         {
             constexpr int T = 32;
             dim3 blk(T, T), grd((N + T - 1) / T, (M + T - 1) / T);
             auto launch = [&]() { mm_tiled<T><<<grd, blk>>>(dA, dB, dC, M, N, K); };
-            double ms = bench_time_ms(launch, 30, 5);
+            BenchStat st = bench_time(launch, 30, 5);
             int correct = check();
-            bench_emit("matmul", "tiled", "f32", M, N, K, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("matmul", "tiled", "f32", M, N, K, st, flops, bytes, correct);
         }
         // regblock
         {
@@ -197,18 +195,16 @@ int main(int argc, char** argv) {
             auto launch = [&]() {
                 mm_regblock<BM, BN, BK, TM, TN><<<grd, blk>>>(dA, dB, dC, M, N, K);
             };
-            double ms = bench_time_ms(launch, 30, 5);
+            BenchStat st = bench_time(launch, 30, 5);
             int correct = check();
-            bench_emit("matmul", "regblock", "f32", M, N, K, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("matmul", "regblock", "f32", M, N, K, st, flops, bytes, correct);
         }
         // cublas
         {
             auto launch = [&]() { cublas_launch(dC); };
-            double ms = bench_time_ms(launch, 30, 5);
+            BenchStat st = bench_time(launch, 30, 5);
             int correct = check();
-            bench_emit("matmul", "cublas", "f32", M, N, K, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("matmul", "cublas", "f32", M, N, K, st, flops, bytes, correct);
         }
 
         CUDA_CHECK(cudaFree(dA)); CUDA_CHECK(cudaFree(dB));

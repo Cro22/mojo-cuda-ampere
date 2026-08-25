@@ -151,17 +151,15 @@ int main(int argc, char** argv) {
 
         {
             auto launch = [&]() { softmax_naive<<<M, BLOCK>>>(d_in, d_out, M, N); };
-            double ms = bench_time_ms(launch);
+            BenchStat st = bench_time(launch);
             int correct = check();
-            bench_emit("softmax", "naive", "f32", M, N, 1, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("softmax", "naive", "f32", M, N, 1, st, flops, bytes, correct);
         }
         {
             auto launch = [&]() { softmax_online<<<M, BLOCK>>>(d_in, d_out, M, N); };
-            double ms = bench_time_ms(launch);
+            BenchStat st = bench_time(launch);
             int correct = check();
-            bench_emit("softmax", "online", "f32", M, N, 1, ms,
-                       flops / (ms * 1e6), bytes / (ms * 1e6), correct);
+            bench_emit("softmax", "online", "f32", M, N, 1, st, flops, bytes, correct);
         }
 
         CUDA_CHECK(cudaFree(d_in));

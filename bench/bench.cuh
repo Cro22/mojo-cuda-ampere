@@ -2,15 +2,20 @@
 //
 // Single source of truth for the CSV schema emitted by every kernel:
 //
-//   kernel,impl,variant,dtype,m,n,k,time_ms,gflops,gbytes_s,correct
+//   kernel,impl,variant,dtype,m,n,k,median_ms,p25_ms,p75_ms,n_runs,gflops,gbytes_s,correct
 //
-// time_ms is the *minimum* per-iteration time over `reps` timed iterations
-// (steady-state, after warmup), measured with CUDA events. gflops / gbytes_s
-// are derived from that time by each kernel's own work/traffic model.
+// Timing reports a *distribution*, not a single number: each point is measured
+// `n_runs` times (after warmup) with CUDA events, and we emit the median plus
+// the 25th/75th percentiles (the inter-quartile range). Reporting the IQR is
+// what lets the README say "indistinguishable" only when the CUDA and Mojo
+// quartile ranges overlap. gflops / gbytes_s are derived from the *median* time
+// by each kernel's own work/traffic model.
 #pragma once
 #include <cstdio>
 #include <cstdlib>
 #include <cfloat>
+#include <vector>
+#include <algorithm>
 #include <cuda_runtime.h>
 
 #define CUDA_CHECK(call)                                                      \
@@ -23,26 +28,52 @@
         }                                                                     \
     } while (0)
 
+// Per-point timing distribution: median and inter-quartile bounds, in ms.
+struct BenchStat {
+    double median_ms;
+    double p25_ms;
+    double p75_ms;
+    int    n_runs;
+};
+
 // Print the CSV header once (harness passes --header on the first invocation).
 static inline void bench_print_header() {
-    printf("kernel,impl,variant,dtype,m,n,k,time_ms,gflops,gbytes_s,correct\n");
+    printf("kernel,impl,variant,dtype,m,n,k,"
+           "median_ms,p25_ms,p75_ms,n_runs,gflops,gbytes_s,correct\n");
 }
 
-// Emit one CSV row.
+// Linear-interpolated percentile of an ascending-sorted sample vector.
+static inline double bench_pct(const std::vector<double>& s, double q) {
+    if (s.empty()) return 0.0;
+    if (s.size() == 1) return s[0];
+    double pos = q * (double)(s.size() - 1);
+    size_t lo = (size_t)pos;
+    if (lo + 1 >= s.size()) return s.back();
+    double frac = pos - (double)lo;
+    return s[lo] * (1.0 - frac) + s[lo + 1] * frac;
+}
+
+// Emit one CSV row. gflops / gbytes_s are derived here from the *median* time so
+// every caller uses the exact same denominator.
 static inline void bench_emit(const char* kernel, const char* variant,
                               const char* dtype, long m, long n, long k,
-                              double time_ms, double gflops, double gbytes_s,
+                              BenchStat st, double flops, double bytes,
                               int correct) {
-    printf("%s,cuda,%s,%s,%ld,%ld,%ld,%.6f,%.3f,%.3f,%d\n", kernel, variant,
-           dtype, m, n, k, time_ms, gflops, gbytes_s, correct);
+    double gflops = flops / (st.median_ms * 1e6);
+    double gbytes = bytes / (st.median_ms * 1e6);
+    printf("%s,cuda,%s,%s,%ld,%ld,%ld,%.6f,%.6f,%.6f,%d,%.3f,%.3f,%d\n",
+           kernel, variant, dtype, m, n, k,
+           st.median_ms, st.p25_ms, st.p75_ms, st.n_runs, gflops, gbytes, correct);
     fflush(stdout);
 }
 
 // Time a callable (lambda taking no args, launching one kernel iteration) with
-// CUDA events. Returns the minimum time in milliseconds over `reps` iterations
-// after `warmup` untimed iterations.
+// CUDA events. Collects `reps` per-iteration samples after `warmup` untimed
+// iterations and returns their median / p25 / p75. Median (not min) so the
+// number is a robust central estimate, and the IQR exposes run-to-run spread
+// instead of hiding it behind a single lucky minimum.
 template <typename F>
-static double bench_time_ms(F&& launch, int reps = 50, int warmup = 10) {
+static BenchStat bench_time(F&& launch, int reps = 30, int warmup = 5) {
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
@@ -50,7 +81,8 @@ static double bench_time_ms(F&& launch, int reps = 50, int warmup = 10) {
     for (int i = 0; i < warmup; ++i) launch();
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    double best = DBL_MAX;
+    std::vector<double> t;
+    t.reserve(reps);
     for (int i = 0; i < reps; ++i) {
         CUDA_CHECK(cudaEventRecord(start));
         launch();
@@ -58,11 +90,14 @@ static double bench_time_ms(F&& launch, int reps = 50, int warmup = 10) {
         CUDA_CHECK(cudaEventSynchronize(stop));
         float ms = 0.0f;
         CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        if (ms < best) best = ms;
+        t.push_back((double)ms);
     }
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
-    return best;
+
+    std::sort(t.begin(), t.end());
+    return BenchStat{ bench_pct(t, 0.50), bench_pct(t, 0.25),
+                      bench_pct(t, 0.75), reps };
 }
 
 // Relative-error correctness check against a reference scalar.

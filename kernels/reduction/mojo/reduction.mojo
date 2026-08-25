@@ -20,6 +20,30 @@ comptime dtype = DType.float32
 comptime BLOCK = 256
 comptime NWARPS = BLOCK // 32
 
+# --- timing statistics: median + inter-quartile range over N samples ---------
+# Mirrors the CUDA side (bench.cuh): report a distribution, not one number, so
+# the write-up can say "indistinguishable" only when the quartile ranges overlap.
+def _isort(mut s: List[Float64]):
+    for i in range(1, len(s)):
+        var key = s[i]
+        var j = i - 1
+        while j >= 0 and s[j] > key:
+            s[j + 1] = s[j]
+            j -= 1
+        s[j + 1] = key
+
+def _pctile(s: List[Float64], q: Float64) -> Float64:
+    # s must be sorted ascending, non-empty. Linear interpolation between ranks.
+    var nm1 = len(s) - 1
+    if nm1 <= 0:
+        return s[0]
+    var pos = q * Float64(nm1)
+    var lo = Int(pos)
+    if lo >= nm1:
+        return s[nm1]
+    var frac = pos - Float64(lo)
+    return s[lo] * (1.0 - frac) + s[lo + 1] * frac
+
 # Block-level sum reduction of one per-thread value -> returned on lane 0
 # (valid only in warp 0). Uses warp.sum + a shared staging array.
 @always_inline
@@ -123,13 +147,24 @@ def main() raises:
             got = h[0]
         var correct = 1 if abs(Float64(got) - ref_sum) / (abs(ref_sum) + 1.0) <= 1e-3 else 0
 
-        var reps = 50
-        var nanos = ctx.execution_time(run, reps)
-        var time_ms = Float64(nanos) / Float64(reps) / 1.0e6
+        # 30 timed samples after 5 warmup; each execution_time(run, 1) is one
+        # iteration's device time. Report median + p25/p75 (matches bench.cuh).
+        comptime WARMUP = 5
+        comptime REPS = 30
+        for _ in range(WARMUP):
+            _ = ctx.execution_time(run, 1)
+        var samples: List[Float64] = []
+        for _ in range(REPS):
+            var ns = ctx.execution_time(run, 1)
+            samples.append(Float64(ns) / 1.0e6)
+        _isort(samples)
+        var median_ms = _pctile(samples, 0.5)
+        var p25_ms = _pctile(samples, 0.25)
+        var p75_ms = _pctile(samples, 0.75)
 
         var bytes = Float64(n) * 4.0
         var flops = Float64(n - 1)
-        var gflops = flops / (time_ms * 1.0e6)
-        var gbytes = bytes / (time_ms * 1.0e6)
-        print("reduction,mojo,warp_shfl,f32,", n, ",1,1,", time_ms, ",",
-              gflops, ",", gbytes, ",", correct, sep="")
+        var gflops = flops / (median_ms * 1.0e6)
+        var gbytes = bytes / (median_ms * 1.0e6)
+        print("reduction,mojo,warp_shfl,f32,", n, ",1,1,", median_ms, ",", p25_ms,
+              ",", p75_ms, ",", REPS, ",", gflops, ",", gbytes, ",", correct, sep="")

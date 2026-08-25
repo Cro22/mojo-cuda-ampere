@@ -8,6 +8,11 @@ NVFLAGS := -O3 -std=c++20 -arch=$(ARCH)
 ROOT    := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))..
 BUILD   := $(ROOT)/bench/build
 
+# CUDA 13 ships CUB/Thrust under .../include/cccl, which is not on nvcc's default
+# search path. Point the reduction build at it so <cub/...> resolves.
+CUDA_HOME ?= $(patsubst %/bin/nvcc,%,$(realpath $(NVCC)))
+CCCL_INC  := $(CUDA_HOME)/targets/x86_64-linux/include/cccl
+
 BINS := $(BUILD)/reduction $(BUILD)/softmax $(BUILD)/matmul
 
 all: $(BINS)
@@ -16,7 +21,7 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/reduction: $(ROOT)/kernels/reduction/cuda/reduction.cu | $(BUILD)
-	$(NVCC) $(NVFLAGS) -o $@ $<
+	$(NVCC) $(NVFLAGS) -I$(CCCL_INC) -o $@ $<
 
 $(BUILD)/softmax: $(ROOT)/kernels/softmax/cuda/softmax.cu | $(BUILD)
 	$(NVCC) $(NVFLAGS) -o $@ $<

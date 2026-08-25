@@ -18,6 +18,27 @@ from max.gpu.memory import AddressSpace
 
 comptime dtype = DType.float32
 
+# --- timing statistics: median + inter-quartile range over N samples ---------
+def _isort(mut s: List[Float64]):
+    for i in range(1, len(s)):
+        var key = s[i]
+        var j = i - 1
+        while j >= 0 and s[j] > key:
+            s[j + 1] = s[j]
+            j -= 1
+        s[j + 1] = key
+
+def _pctile(s: List[Float64], q: Float64) -> Float64:
+    var nm1 = len(s) - 1
+    if nm1 <= 0:
+        return s[0]
+    var pos = q * Float64(nm1)
+    var lo = Int(pos)
+    if lo >= nm1:
+        return s[nm1]
+    var frac = pos - Float64(lo)
+    return s[lo] * (1.0 - frac) + s[lo + 1] * frac
+
 # ---- tiled (32x32) --------------------------------------------------------
 comptime T = 32
 
@@ -162,7 +183,8 @@ def main() raises:
         comptime k_reg = mm_regblock[type_of(layout)]
 
         # subset correctness check against CPU dot products (inlined below)
-        var reps = 20
+        comptime WARMUP = 5
+        comptime REPS = 30
 
         # tiled
         def run_tiled(cc: DeviceContext) raises {A, B, C, M, N, K}:
@@ -184,10 +206,18 @@ def main() raises:
                 num_t += d * d
                 den_t += acc * acc
         ok_t = 1 if (num_t / den_t) ** 0.5 <= 1e-4 else 0
-        var ns_t = ctx.execution_time(run_tiled, reps)
-        var ms_t = Float64(ns_t) / Float64(reps) / 1.0e6
-        print("matmul,mojo,tiled,f32,", M, ",", N, ",", K, ",", ms_t, ",",
-              flops / (ms_t * 1.0e6), ",", bytes / (ms_t * 1.0e6), ",", ok_t, sep="")
+        for _ in range(WARMUP):
+            _ = ctx.execution_time(run_tiled, 1)
+        var samp_t: List[Float64] = []
+        for _ in range(REPS):
+            samp_t.append(Float64(ctx.execution_time(run_tiled, 1)) / 1.0e6)
+        _isort(samp_t)
+        var med_t = _pctile(samp_t, 0.5)
+        var p25_t = _pctile(samp_t, 0.25)
+        var p75_t = _pctile(samp_t, 0.75)
+        print("matmul,mojo,tiled,f32,", M, ",", N, ",", K, ",", med_t, ",", p25_t,
+              ",", p75_t, ",", REPS, ",", flops / (med_t * 1.0e6), ",",
+              bytes / (med_t * 1.0e6), ",", ok_t, sep="")
 
         # regblock
         def run_reg(cc: DeviceContext) raises {A, B, C, M, N, K}:
@@ -209,7 +239,15 @@ def main() raises:
                 num_r += d * d
                 den_r += acc * acc
         ok_r = 1 if (num_r / den_r) ** 0.5 <= 1e-4 else 0
-        var ns_r = ctx.execution_time(run_reg, reps)
-        var ms_r = Float64(ns_r) / Float64(reps) / 1.0e6
-        print("matmul,mojo,regblock,f32,", M, ",", N, ",", K, ",", ms_r, ",",
-              flops / (ms_r * 1.0e6), ",", bytes / (ms_r * 1.0e6), ",", ok_r, sep="")
+        for _ in range(WARMUP):
+            _ = ctx.execution_time(run_reg, 1)
+        var samp_r: List[Float64] = []
+        for _ in range(REPS):
+            samp_r.append(Float64(ctx.execution_time(run_reg, 1)) / 1.0e6)
+        _isort(samp_r)
+        var med_r = _pctile(samp_r, 0.5)
+        var p25_r = _pctile(samp_r, 0.25)
+        var p75_r = _pctile(samp_r, 0.75)
+        print("matmul,mojo,regblock,f32,", M, ",", N, ",", K, ",", med_r, ",", p25_r,
+              ",", p75_r, ",", REPS, ",", flops / (med_r * 1.0e6), ",",
+              bytes / (med_r * 1.0e6), ",", ok_r, sep="")
