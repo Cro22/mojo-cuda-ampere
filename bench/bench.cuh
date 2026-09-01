@@ -18,6 +18,14 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 
+// The `impl` column of the CSV. Defaults to "cuda"; the ROCm/HIP build defines
+// -DBENCH_IMPL=\"hip\" so the two backends' rows stay distinguishable in one
+// results.csv (otherwise every HIP row masquerades as a CUDA row and the plots
+// mislabel). Overridable at compile time only — never read at runtime.
+#ifndef BENCH_IMPL
+#define BENCH_IMPL "cuda"
+#endif
+
 #define CUDA_CHECK(call)                                                      \
     do {                                                                      \
         cudaError_t _e = (call);                                              \
@@ -61,8 +69,8 @@ static inline void bench_emit(const char* kernel, const char* variant,
                               int correct) {
     double gflops = flops / (st.median_ms * 1e6);
     double gbytes = bytes / (st.median_ms * 1e6);
-    printf("%s,cuda,%s,%s,%ld,%ld,%ld,%.6f,%.6f,%.6f,%d,%.3f,%.3f,%d\n",
-           kernel, variant, dtype, m, n, k,
+    printf("%s,%s,%s,%s,%ld,%ld,%ld,%.6f,%.6f,%.6f,%d,%.3f,%.3f,%d\n",
+           kernel, BENCH_IMPL, variant, dtype, m, n, k,
            st.median_ms, st.p25_ms, st.p75_ms, st.n_runs, gflops, gbytes, correct);
     fflush(stdout);
 }

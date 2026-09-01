@@ -13,6 +13,11 @@ a.out
 *.fatbin
 *.mojopkg
 
+# HIPified sources generated on the AMD box by `make hipify` (see docs/amd-port.md).
+# The pristine .cu are the source of truth; these are regenerated artifacts.
+kernels/*/hip/
+bench/bench.hip.h
+
 # --- profiling ---------------------------------------------------------------
 # Nsight Compute/Systems raw reports (large); keep the .txt summaries
 *.ncu-rep
